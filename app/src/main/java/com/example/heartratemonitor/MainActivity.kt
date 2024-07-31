@@ -1,17 +1,10 @@
 package com.example.heartratemonitor
 
 import android.Manifest
-import android.app.AlertDialog
 import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
-import android.content.BroadcastReceiver
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.content.ServiceConnection
+import android.content.*
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -20,138 +13,92 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.heartratemonitor.ui.theme.HeartRateMonitorTheme
-import org.tensorflow.lite.Interpreter
-import java.io.FileInputStream
-import java.nio.MappedByteBuffer
-import java.nio.channels.FileChannel
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var tflite: Interpreter
-    private lateinit var bluetoothManager: BluetoothManager
-    private lateinit var bluetoothAdapter: BluetoothAdapter
-    private var deviceAddress: String? = null
-
+    private var bluetoothAdapter: BluetoothAdapter? = null
     private var bluetoothLeService: BluetoothLeService? = null
+    private var deviceAddress: String? = null
     private var isBound = false
 
-    private val bluetoothReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            val action = intent.action
-            if (BluetoothDevice.ACTION_FOUND == action) {
-                try {
-                    val device: BluetoothDevice =
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)!!
-
-                    if (checkBluetoothPermissions()) {
-                        // Check if this is the device we want to connect to
-                        if (device.name == "TicWatch Pro 3 GPS") { // Replace with your smartwatch's name
-                            deviceAddress = device.address
-                            Log.e("MainActivity", "Device is true")
-                            // Stop discovery once the device is found
-                            bluetoothAdapter.cancelDiscovery()
-                            startBluetoothOperations()
-                        }
-                    } else {
-                        Log.e("MainActivity", "Bluetooth permissions are not granted")
-                    }
-                } catch (e: SecurityException) {
-                    Log.e("MainActivity", "Permission error: $e")
-                }
-            }
-        }
-    }
-
-    private val serviceConnection = object : ServiceConnection {
+    // Code to manage Service lifecycle.
+    private val serviceConnection: ServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(componentName: ComponentName, service: IBinder) {
-            val binder = service as BluetoothLeService.LocalBinder
-            bluetoothLeService = binder.getService()
-            isBound = true
-            bluetoothLeService?.let { service ->
-                if (checkBluetoothPermissions() && deviceAddress != null) {
-                    service.connect(deviceAddress!!)
-                } else {
-                    Toast.makeText(this@MainActivity, "Bluetooth permissions are required", Toast.LENGTH_SHORT).show()
+            bluetoothLeService = (service as BluetoothLeService.LocalBinder).getService()
+            bluetoothLeService?.let { bluetooth ->
+                if (!bluetooth.initialize()) {
+                    Log.e(TAG, "Unable to initialize Bluetooth")
+                    finish()
                 }
+                // Perform device connection
+                deviceAddress?.let { bluetooth.connect(it) }
             }
         }
 
         override fun onServiceDisconnected(componentName: ComponentName) {
             bluetoothLeService = null
-            isBound = false
+        }
+    }
+
+    private val gattUpdateReceiver: BroadcastReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                BluetoothLeService.ACTION_GATT_CONNECTED -> {
+                    Log.i(TAG, "GATT connected.")
+                    Toast.makeText(context, "Device connected", Toast.LENGTH_SHORT).show()
+                }
+                BluetoothLeService.ACTION_GATT_DISCONNECTED -> {
+                    Log.i(TAG, "GATT disconnected.")
+                    Toast.makeText(context, "Device disconnected", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize BluetoothManager and BluetoothAdapter
-        bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        // Initialize Bluetooth adapter
+        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
 
-        // Initialize TensorFlow Lite model
-        val modelPath = "ECG_classification.tflite"
-        try {
-            tflite = Interpreter(loadModelFile(modelPath))
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Failed to load model: $e")
-            Toast.makeText(this, "Failed to load model", Toast.LENGTH_SHORT).show()
-            return
-        }
+        // Bind to the service
+        val gattServiceIntent = Intent(this, BluetoothLeService::class.java)
+        bindService(gattServiceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
 
-        // Request necessary permissions
-        if (checkPermissions()) {
-            // Check if a device is already connected
-            if (checkBluetoothPermissions()) {
-                val connectedDevices = bluetoothManager.getConnectedDevices(BluetoothProfile.GATT)
-                Log.d("MainActivity", "Device connected $connectedDevices")
-
-                if (connectedDevices.isEmpty()) {
-                    // No devices connected, start device discovery
-                    startDeviceDiscovery()
-                } else {
-                    Log.d("MainActivity", "A device is already connected")
-                }
-            }
-        } else {
-            // Request permissions
-            requestBluetoothPermissions()
-        }
+        // Start BLE scan
+        startBleScan()
 
         setContent {
             HeartRateMonitorTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    HeartRateDisplay(0f) // Placeholder value for initial display
-                }
+                var heartRate by remember { mutableStateOf(0f) }
+                HeartRateDisplay(heartRate = heartRate)
             }
         }
     }
 
-    private fun loadModelFile(modelPath: String): MappedByteBuffer {
-        val fileDescriptor = assets.openFd(modelPath)
-        val inputStream = FileInputStream(fileDescriptor.fileDescriptor)
-        val fileChannel = inputStream.channel
-        val startOffset = fileDescriptor.startOffset
-        val declaredLength = fileDescriptor.declaredLength
-        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+    override fun onResume() {
+        super.onResume()
+        registerReceiver(gattUpdateReceiver, makeGattUpdateIntentFilter())
     }
 
-    private fun preprocessData(rawData: FloatArray): Array<FloatArray> {
-        // Ensure the data is the correct shape [1, 187]
-        return arrayOf(rawData)
+    override fun onPause() {
+        super.onPause()
+        unregisterReceiver(gattUpdateReceiver)
+    }
+
+    private fun makeGattUpdateIntentFilter(): IntentFilter {
+        return IntentFilter().apply {
+            addAction(BluetoothLeService.ACTION_GATT_CONNECTED)
+            addAction(BluetoothLeService.ACTION_GATT_DISCONNECTED)
+        }
     }
 
     private fun checkPermissions(): Boolean {
@@ -175,105 +122,44 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun checkBluetoothPermissions(): Boolean {
-        return checkPermissions()
-    }
 
-    private fun requestBluetoothPermissions() {
-        val permissionsToRequest = mutableListOf(
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_ADMIN,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        )
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            permissionsToRequest.addAll(
-                listOf(
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_SCAN
-                )
-            )
+    private fun startBleScan() {
+        if (checkPermissions()) {
+            bluetoothAdapter?.bluetoothLeScanner?.startScan(leScanCallback)
         }
-
-        ActivityCompat.requestPermissions(
-            this,
-            permissionsToRequest.toTypedArray(),
-            REQUEST_BLUETOOTH_PERMISSIONS
-        )
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_BLUETOOTH_PERMISSIONS) {
-            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                startDeviceDiscovery()
-            } else {
-                Toast.makeText(this, "Bluetooth permissions are required", Toast.LENGTH_SHORT).show()
+
+
+    private fun stopBleScan() {
+        bluetoothAdapter?.bluetoothLeScanner?.stopScan(leScanCallback)
+    }
+
+    private val leScanCallback = object : android.bluetooth.le.ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: android.bluetooth.le.ScanResult) {
+            super.onScanResult(callbackType, result)
+            val device = result.device
+            Log.d(TAG, "Device found: ${device.name}, ${device.address}")
+            if (device.name == "TicWatch Pro 3 GPS") { // Replace with your smartwatch's name
+                deviceAddress = device.address
+                Log.d(TAG, "Target device found: $deviceAddress")
+                stopBleScan()
+                bluetoothLeService?.connect(deviceAddress!!)
             }
         }
-    }
-
-    private fun startDeviceDiscovery() {
-        if (checkBluetoothPermissions()) {
-            if (bluetoothAdapter.isDiscovering) {
-                bluetoothAdapter.cancelDiscovery()
-            }
-
-            bluetoothAdapter.startDiscovery()
-            val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
-            registerReceiver(bluetoothReceiver, filter)
-
-            // Show paired devices
-            showPairedDevices()
-        } else {
-            Toast.makeText(this, "Bluetooth permissions are required", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun showPairedDevices() {
-        if (checkBluetoothPermissions()) {
-            val pairedDevices = bluetoothAdapter.bondedDevices
-            val deviceNames = pairedDevices.map { it.name }.toTypedArray()
-            val deviceAddresses = pairedDevices.associateBy { it.name }
-
-            bluetoothLeService?.initialize()
-            // Show the paired devices in a dialog
-            AlertDialog.Builder(this)
-                .setTitle("Select a Device")
-                .setItems(deviceNames) { _, which ->
-                    val selectedDeviceName = deviceNames[which]
-                    deviceAddress = deviceAddresses[selectedDeviceName]?.address
-                    startBluetoothOperations()
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        } else {
-            Toast.makeText(this, "Bluetooth permissions are required", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun startBluetoothOperations() {
-        // Bind to BluetoothLeService
-        val gattServiceIntent = Intent(this, BluetoothLeService::class.java)
-        bindService(gattServiceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
-
-        Toast.makeText(this, "Bluetooth service started", Toast.LENGTH_SHORT).show()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        unregisterReceiver(bluetoothReceiver)
         if (isBound) {
             unbindService(serviceConnection)
+            isBound = false
         }
+        stopBleScan()
     }
 
     companion object {
-        private const val REQUEST_BLUETOOTH_PERMISSIONS = 1
+        private const val TAG = "MainActivity"
     }
 }
 
@@ -282,7 +168,7 @@ fun HeartRateDisplay(heartRate: Float) {
     Text(
         text = "Current Heart Rate: $heartRate BPM",
         style = MaterialTheme.typography.bodyLarge,
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier
     )
 }
 
@@ -290,6 +176,6 @@ fun HeartRateDisplay(heartRate: Float) {
 @Composable
 fun HeartRateDisplayPreview() {
     HeartRateMonitorTheme {
-        HeartRateDisplay(72f)
+        HeartRateDisplay(heartRate = 72.5f)
     }
 }
