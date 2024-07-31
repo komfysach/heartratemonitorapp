@@ -7,7 +7,7 @@ import androidx.core.content.ContextCompat
 
 class BluetoothHeartRateReader(private val context: Context) {
 
-    private val bluetoothServer = BluetoothServer(context)
+//    private val bluetoothServer = BluetoothServer(context)
 
     fun checkPermissions(): Boolean {
         val permissions = mutableListOf(
@@ -33,6 +33,6 @@ class BluetoothHeartRateReader(private val context: Context) {
         }
 
         // Start Bluetooth server
-        bluetoothServer.startServer()
+//        bluetoothServer.startServer()
     }
 }
