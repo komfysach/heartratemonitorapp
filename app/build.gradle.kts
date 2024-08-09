@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.heartratemonitor"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 33
         versionCode = 1
         versionName = "1.0"
@@ -64,6 +64,7 @@ dependencies {
     androidTestImplementation(libs.ui.test.junit4)
     debugImplementation(libs.ui.tooling)
     debugImplementation(libs.ui.test.manifest)
-    implementation("org.tensorflow:tensorflow-lite:2.11.0")
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.11.0")
+    implementation(libs.tensorflow.lite)
+    implementation(libs.tensorflow.lite.gpu)
+    implementation("com.github.PhilJay:MPAndroidChart:v3.1.0")
 }
