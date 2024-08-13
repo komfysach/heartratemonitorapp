@@ -1,25 +1,20 @@
 package com.example.heartratemonitor
 
-import android.Manifest
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
 import android.content.*
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.os.IBinder
 import android.util.Log
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.annotation.RequiresApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.core.content.ContextCompat
 import com.example.heartratemonitor.ui.theme.HeartRateMonitorTheme
 
+import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -42,12 +37,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.yourapppackageimport.BluetoothSWService
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
-import kotlinx.coroutines.delay
 import org.tensorflow.lite.Interpreter
 import java.io.FileInputStream
 import java.nio.MappedByteBuffer
@@ -58,18 +51,28 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var tflite: Interpreter
     private val heartRateData = mutableStateListOf<Float>()
+    private val isNormalHeartRate = mutableStateOf(false)
 
     private val heartRateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            Log.d("HeartRateReceiver", "Received intent: ${intent.action}")
             if (intent.action == BluetoothSWService.ACTION_HEART_RATE_DATA) {
                 val heartRate = intent.getFloatExtra(BluetoothSWService.EXTRA_HEART_RATE_DATA, 0f)
-                // Update heartRate and heartRateData here
                 heartRateData.add(heartRate)
             }
         }
     }
 
+    private val connectionStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.d("ConnectionStatusReceiver", "Received intent: ${intent.action}")
+            if (intent.action == BluetoothSWService.ACTION_CONNECTION_STATUS) {
+                ConnectionState.isConnected.value = intent.getBooleanExtra(BluetoothSWService.EXTRA_CONNECTION_STATUS, false)
+            }
+        }
+    }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -77,31 +80,54 @@ class MainActivity : ComponentActivity() {
         val modelPath = "ECG_classification.tflite"
         tflite = Interpreter(loadModelFile(modelPath))
 
-        // Register broadcast receiver
-        val filter = IntentFilter(BluetoothSWService.ACTION_HEART_RATE_DATA)
-        registerReceiver(heartRateReceiver, filter)
-
         Intent(this, BluetoothSWService::class.java).also { intent ->
             startService(intent)
         }
+
+        val connectionStatusFilter = IntentFilter(BluetoothSWService.ACTION_CONNECTION_STATUS)
+        registerReceiver(connectionStatusReceiver, connectionStatusFilter)
+
+        val heartRateFilter = IntentFilter(BluetoothSWService.ACTION_HEART_RATE_DATA)
+        registerReceiver(heartRateReceiver, heartRateFilter)
 
         setContent {
             HeartRateMonitorTheme {
                 val chart = remember { createLineChart(this) }
                 var heartRate by remember { mutableStateOf(0f) }
                 val heartRateData = remember { mutableStateListOf<Float>() }
-                HeartRateDisplay(heartRate = heartRate, heartRateData = heartRateData)
+                var isNormalHeartRate = remember { mutableStateOf(false) }
+
+                HeartRateDisplay(heartRate = heartRate, heartRateData = heartRateData, isNormalHeartRate = isNormalHeartRate.value)
 
                 // Update heartRateData somewhere in your code
 //                LaunchedEffect(key1 = heartRateData) { // Example using LaunchedEffect
-//                    while (true) {
+//                    while (heartRateData.size < 187) {
 //                        delay(1000) // Simulate getting new data every second
-//                        heartRate = (70..100).random().toFloat()
+//                        heartRate = (52..54).random().toFloat()
 //                        heartRateData.add(heartRate)
 //                        chart.notifyDataSetChanged()
 //                        chart.invalidate()
 //                    }
 //                }
+
+//                LaunchedEffect(key1 = heartRateData) { // Example using LaunchedEffect
+//                    while (heartRateData.size < 187) {
+//                        delay(1000) // Simulate getting new data every second
+//                        heartRate = (110..150).random().toFloat()
+//                        heartRateData.add(heartRate)
+//                        chart.notifyDataSetChanged()
+//                        chart.invalidate()
+//                    }
+//                }
+
+                LaunchedEffect(key1 = heartRateData) {
+                    snapshotFlow { heartRateData.size }
+                        .collect { size ->
+                            if (size >= 187) {
+                                runInference(heartRateData)
+                            }
+                        }
+                }
             }
         }
 
@@ -116,8 +142,41 @@ class MainActivity : ComponentActivity() {
         return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
     }
 
+    private fun runInference(heartRateData: List<Float>) {
+        val minHR = 0f // Replace with the actual minimum heart rate from your training data
+        val maxHR = 200f // Replace with the actual maximum heart rate from your training data
+
+        // 1. Preprocess the data
+        val input = heartRateData.map { (it - minHR) / (maxHR - minHR) }.toFloatArray()
+        if (input.size != 187) {
+            // Handle case where input size is not 187
+            Log.e("Inference", "Invalid input size: ${input.size}")
+            return
+        }
+        val inputBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 187),
+            org.tensorflow.lite.DataType.FLOAT32)
+        inputBuffer.loadArray(input)
+
+        // 2. Run inference
+        val outputs = HashMap<Int, Any>()
+        val outputBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 1),
+            org.tensorflow.lite.DataType.FLOAT32)
+        tflite.run(inputBuffer.buffer, outputBuffer.buffer)
+
+        val output = outputBuffer.floatArray
+        val result = output[0]
+        val isNormal = result <= 0.5 // Apply the threshold
+
+        // 4. Log the output and update state
+        Log.d("Inference", "Output: $result, isNormal: $isNormal")
+        isNormalHeartRate.value = isNormal
+        // You'll need to determine how to interpret the output and update your state
+        // For example, you might have a threshold to determine normal/abnormal
+    }
+
     @Composable
-    fun HeartRateDisplay(heartRate: Float, heartRateData: List<Float>) {
+    fun HeartRateDisplay(heartRate: Float, heartRateData: List<Float>, isNormalHeartRate: Boolean) {
+        val connected = ConnectionState.isConnected.value
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -136,6 +195,8 @@ class MainActivity : ComponentActivity() {
                     color = Color.White
                 )
             )
+            Text(text = "Is Normal Heart Rate: $isNormalHeartRate", color = if (isNormalHeartRate) Color.Green else Color.Red)
+            Text(text = if (connected) "Connected" else "Disconnected", color = if (connected) Color.Green else Color.Red)
             Log.d("HeartRateDisplay", "Heart Rate Data: $heartRateData")
             HeartRateChart(heartRateData = heartRateData) // Assuming a HeartRateChart component
         }
@@ -184,7 +245,9 @@ class MainActivity : ComponentActivity() {
 
         // Add the chart to your Compose UI using AndroidView
         AndroidView(
-            modifier = Modifier.fillMaxWidth().height(200.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp),
             factory = { chart },
             update = {
                 chart.notifyDataSetChanged()
@@ -199,9 +262,29 @@ class MainActivity : ComponentActivity() {
         return chart
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    override fun onResume() {
+        super.onResume()
+        val heartRateReceiverFilter = IntentFilter(BluetoothSWService.ACTION_HEART_RATE_DATA)
+        registerReceiver(heartRateReceiver, heartRateReceiverFilter, RECEIVER_NOT_EXPORTED)
+        val connectionFilter = IntentFilter(BluetoothSWService.ACTION_CONNECTION_STATUS)
+        registerReceiver(connectionStatusReceiver, connectionFilter, RECEIVER_NOT_EXPORTED)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        unregisterReceiver(heartRateReceiver)
+        unregisterReceiver(connectionStatusReceiver)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(heartRateReceiver) // Unregister receiver when activity is destroyed
+        unregisterReceiver(connectionStatusReceiver)
+    }
+
+    object ConnectionState {
+        var isConnected: MutableState<Boolean> = mutableStateOf(false)
     }
 
     @Preview(showBackground = true)
@@ -212,7 +295,8 @@ class MainActivity : ComponentActivity() {
                 heartRate = 72.5f,
                 heartRateData = listOf(
                     72.5f, 73.0f, 73.5f, 74.0f, 74.5f, 75.0f, 75.5f, 76.0f
-                )
+                ),
+                isNormalHeartRate = true
             )
         }
     }

@@ -10,7 +10,11 @@ lifecycle-runtime-ktx = "2.6.1"
 activity-compose = "1.7.0"
 compose-bom = "2023.03.00"
 mpandroidchart = "v3.1.0"
+tensorflow-lite = "2.12.0"
 tensorflow-lite-gpu = "2.11.0"
+bluetooth = "1.0.0-alpha02"
+tensorflow-lite-support = "0.4.3"
+play-services-fitness = "21.2.0"
 
 [libraries]
 charts = { module = "co.yml:charts", version.ref = "charts" }
@@ -24,6 +28,8 @@ compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = 
 mpandroidchart = { module = "com.github.PhilJay:MPAndroidChart", version.ref = "mpandroidchart" }
 tensorflow-lite = { module = "org.tensorflow:tensorflow-lite", version.ref = "tensorflow-lite-gpu" }
 tensorflow-lite-gpu = { module = "org.tensorflow:tensorflow-lite-gpu", version.ref = "tensorflow-lite-gpu" }
+tensorflow-lite-support = { module = "org.tensorflow:tensorflow-lite-support", version.ref = "tensorflow-lite-support" }
+tensorflow-lite-v2120 = { module = "org.tensorflow:tensorflow-lite", version.ref = "tensorflow-lite" }
 ui = { group = "androidx.compose.ui", name = "ui" }
 ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
@@ -31,6 +37,8 @@ ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview
 ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-bluetooth = { group = "androidx.bluetooth", name = "bluetooth", version.ref = "bluetooth" }
+play-services-fitness = { group = "com.google.android.gms", name = "play-services-fitness", version.ref = "play-services-fitness" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
