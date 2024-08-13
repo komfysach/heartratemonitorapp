@@ -66,5 +66,5 @@ dependencies {
     debugImplementation(libs.ui.test.manifest)
     implementation(libs.tensorflow.lite)
     implementation(libs.tensorflow.lite.gpu)
-    implementation("com.github.PhilJay:MPAndroidChart:v3.1.0")
+    implementation(libs.mpandroidchart)
 }

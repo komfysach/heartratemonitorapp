@@ -12,7 +12,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"/>
-
+    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-feature android:name="android.software.companion_device_setup"/>
 
 
@@ -28,8 +28,8 @@
         android:theme="@style/Theme.HeartRateMonitor"
         tools:targetApi="31" >
 
-        <service
-            android:name=".BluetoothLeService"
+        <service android:name="com.example.yourapppackageimport.BluetoothSWService"
+            android:enabled="true"
             android:exported="false" />
 
         <activity
