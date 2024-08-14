@@ -6,7 +6,10 @@ import android.app.Service
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -25,6 +28,15 @@ class BluetoothSWService : Service() {
     private var bluetoothSocket: BluetoothSocket? = null
     private var connectionJob: Job? = null
 
+    private val closeConnectionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == MainActivity.ACTION_CLOSE_CONNECTION) {
+                closeConnection() // Call the existing closeConnection function
+            }
+        }
+    }
+
+
     companion object {
         private const val TAG = "BluetoothSWService"
         private val MY_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB") // Replace with your app's UUID
@@ -37,6 +49,13 @@ class BluetoothSWService : Service() {
     override fun onBind(intent: Intent?): IBinder? {
         return null
     }
+
+    override fun onCreate() {
+        super.onCreate()
+        val filter = IntentFilter(MainActivity.ACTION_CLOSE_CONNECTION)
+        registerReceiver(closeConnectionReceiver, filter)
+    }
+
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         acceptConnection()
@@ -112,6 +131,7 @@ class BluetoothSWService : Service() {
             bluetoothSocket?.close()
             Log.d(TAG, "Connection closed")
             updateConnectionStatus(false)
+            acceptConnection()
         } catch (e: IOException) {
             Log.e(TAG, "Error closing connection: ${e.message}")
         }
@@ -119,6 +139,7 @@ class BluetoothSWService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterReceiver(closeConnectionReceiver)
         connectionJob?.cancel()
         closeConnection()
     }
